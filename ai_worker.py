@@ -5,7 +5,7 @@ from google import genai
 # Environment Variables (Railway safe)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 RENTAHUMAN_API_KEY = os.environ.get("RENTAHUMAN_API_KEY")
-BASE_URL = "https://api.rentahuman.ai/v1"
+BASE_URL = "https://rentahuman.ai/api"
 
 # Google GenAI Setup (Latest SDK)
 if not GEMINI_API_KEY:
