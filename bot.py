@@ -1,418 +1,152 @@
-import discord
-import asyncio
-import aiohttp
-import random
-from datetime import datetime
-from config import (
-    RENTAHUMAN_API_KEY,
-    DISCORD_BOT_TOKEN,
-    DISCORD_CHANNEL_ID,
-    CHECK_INTERVAL_MINUTES,
-    MAX_APPLICATIONS_PER_DAY
-)
-from ai_worker import (
-    generate_cover_letter,
-    do_research_task,
-    should_take_task,
-    reply_to_client_message
-)
-from memory import (
-    load_memory,
-    record_applied,
-    record_won,
-    record_completed,
-    get_performance_report,
-    evolve_strategy
-)
+import os
+import requests
+from google import genai
 
-intents = discord.Intents.default()
-intents.message_content = True
-client = discord.Client(intents=intents)
+# Environment Variables se Keys uthana (GitHub Safe)
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+RENTAHUMAN_API_KEY = os.environ.get("RENTAHUMAN_API_KEY")
+BASE_URL = "https://api.rentahuman.ai/v1"
 
-applied_tasks = set()
-daily_applications = 0
-pending_approvals = {}
-pending_work_review = {}
-active_tasks = {}
-memory = load_memory()
+# Google GenAI Setup
+if not GEMINI_API_KEY:
+    print("❌ Error: GEMINI_API_KEY environment variable missing!")
+client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Fixed headers — Brotli disable
-API_HEADERS = {
-    "Authorization": f"Bearer {RENTAHUMAN_API_KEY}",
-    "Content-Type": "application/json",
-    "Accept-Encoding": "gzip, deflate",
-    "Accept": "application/json"
+HUMAN_PROFILE = """
+My name is Arba. I am a freelancer from Pakistan.
+I have 2 years experience in:
+- Web research and data collection
+- Writing articles and content
+- User testing and app feedback
+- Fact checking and verification
+- Survey completion
+- Referral and hiring tasks
+- Product reviews and feedback
+I am detail-oriented, reliable, and deliver on time.
+I prefer remote work only.
+"""
+
+ALLOWED_TASKS = {
+    "user_testing": ["user test", "app test", "test app", "test website",
+        "feedback", "usability", "ux research", "user experience",
+        "record feedback", "test and feedback"],
+    "writing_content": ["write", "article", "content", "blog", "copy",
+        "description", "caption", "post", "text", "draft"],
+    "research_remote": ["research", "find information", "web research",
+        "online research", "data collection", "gather info", "compile",
+        "list of", "find email", "find contact", "market research"],
+    "referral": ["refer", "referral", "recommend someone", "candidate",
+        "hiring referral", "job referral", "finder's fee"],
+    "survey": ["survey", "questionnaire", "form", "fill out",
+        "complete survey", "answer questions"],
+    "review": ["review", "rate", "rating", "evaluate",
+        "product review", "app review", "leave review"],
+    "data_entry": ["data entry", "spreadsheet", "excel", "google sheets",
+        "enter data", "fill data", "organize data"]
 }
 
-async def fetch_open_bounties():
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(
-                "https://rentahuman.ai/api/bounties",
-                headers=API_HEADERS
-            ) as resp:
-                print(f"API status: {resp.status}")
-                if resp.status == 200:
-                    data = await resp.json(content_type=None)
-                    # API returns {"success": true, "bounties": [...]}
-                    if isinstance(data, dict) and data.get('success'):
-                        bounties = data.get('bounties', [])
-                        print(f"Bounties found: {len(bounties)}")
-                        return bounties
-                    elif isinstance(data, list):
-                        return data
-                return []
-        except Exception as e:
-            print(f"Fetch error: {e}")
-            return []
+BLOCKED_TASKS = [
+    "pickup", "pick up", "delivery", "deliver", "errand",
+    "in person", "in-person", "local", "photo", "photograph",
+    "video", "film", "record video", "attend", "event",
+    "walk", "drive", "move", "carry", "install physically",
+    "design logo", "graphic design", "audio", "podcast"
+]
 
-async def fetch_accepted_tasks():
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(
-                "https://rentahuman.ai/api/bounties/assigned",
-                headers=API_HEADERS
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json(content_type=None)
-                    if isinstance(data, dict) and data.get('success'):
-                        return data.get('bounties', [])
-                    elif isinstance(data, list):
-                        return data
-                return []
-        except Exception as e:
-            print(f"Accepted fetch error: {e}")
-            return []
-
-async def apply_to_bounty(bounty_id: str, cover_letter: str):
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(
-                f"https://rentahuman.ai/api/bounties/{bounty_id}/apply",
-                headers=API_HEADERS,
-                json={"message": cover_letter}
-            ) as resp:
-                print(f"Apply status: {resp.status}")
-                return resp.status in [200, 201]
-        except Exception as e:
-            print(f"Apply error: {e}")
-            return False
-
-async def submit_work(bounty_id: str, result_text: str):
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(
-                f"https://rentahuman.ai/api/bounties/{bounty_id}/submit",
-                headers=API_HEADERS,
-                json={"submission": result_text}
-            ) as resp:
-                return resp.status in [200, 201]
-        except Exception as e:
-            print(f"Submit error: {e}")
-            return False
-
-async def hunt_tasks():
-    global daily_applications, memory
-    await client.wait_until_ready()
-    channel = client.get_channel(DISCORD_CHANNEL_ID)
-
-    while not client.is_closed():
-        try:
-            if daily_applications >= MAX_APPLICATIONS_PER_DAY:
-                await channel.send("⏸️ Daily limit ho gaya! Kal phir shuru karunga.")
-                await asyncio.sleep(3600)
-                daily_applications = 0
-                continue
-
-            print(f"[{datetime.now().strftime('%H:%M')}] Tasks dhundh raha hoon...")
-
-            min_price = memory['strategy']['min_price']
-            preferred = memory['strategy']['preferred_categories']
-            avoided = memory['strategy']['avoided_categories']
-
-            bounties = await fetch_open_bounties()
-
-            for b in bounties:
-                if not isinstance(b, dict):
-                    continue
-                if b.get('id') in applied_tasks:
-                    continue
-                if b.get('status') != 'open':
-                    continue
-                if b.get('price', 0) < min_price:
-                    continue
-
-                # Remote only
-                location = b.get('location', {})
-                if isinstance(location, dict):
-                    if not location.get('isRemoteAllowed', False):
-                        print(f"Not remote: {b.get('title')}")
-                        continue
-
-                category = b.get('category', '').lower()
-                if any(av in category for av in avoided):
-                    continue
-
-                take, reason, confidence = should_take_task(
-                    b.get('title', ''),
-                    b.get('description', ''),
-                    b.get('price', 0)
-                )
-
-                if preferred and any(p in category for p in preferred):
-                    confidence = min(10, confidence + 2)
-
-                if not take or confidence < 6:
-                    print(f"Skip: {b.get('title')} ({confidence}/10)")
-                    applied_tasks.add(b.get('id'))
-                    continue
-
-                cover_letter = generate_cover_letter(
-                    b.get('title', ''),
-                    b.get('description', '')
-                )
-
-                embed = discord.Embed(
-                    title=f"💼 {b.get('title', 'Task')[:100]}",
-                    color=0x3498db
-                )
-                embed.add_field(name="💰 Price", value=f"${b.get('price', '?')}", inline=True)
-                embed.add_field(name="📂 Category", value=b.get('category', 'N/A'), inline=True)
-                embed.add_field(name="🧠 AI Score", value=f"{confidence}/10 — {reason}", inline=False)
-                embed.add_field(name="📝 Task", value=str(b.get('description', ''))[:300] + "...", inline=False)
-                embed.add_field(name="✉️ Cover Letter", value=cover_letter[:400], inline=False)
-                embed.set_footer(text="✅ Apply | ❌ Skip")
-
-                msg = await channel.send(embed=embed)
-                await msg.add_reaction("✅")
-                await msg.add_reaction("❌")
-                pending_approvals[msg.id] = {'task': b, 'cover_letter': cover_letter}
-                await asyncio.sleep(random.randint(30, 90))
-
-        except Exception as e:
-            print(f"Hunt error: {e}")
-            import traceback
-            traceback.print_exc()
-
-        await asyncio.sleep(CHECK_INTERVAL_MINUTES * 60)
-
-async def check_accepted_tasks():
-    global memory
-    await client.wait_until_ready()
-    channel = client.get_channel(DISCORD_CHANNEL_ID)
-
-    while not client.is_closed():
-        try:
-            accepted = await fetch_accepted_tasks()
-            for task in accepted:
-                if not isinstance(task, dict):
-                    continue
-                bounty_id = task.get('id')
-                if bounty_id and bounty_id not in active_tasks:
-                    active_tasks[bounty_id] = task
-                    record_won(memory, task)
-                    await channel.send(
-                        f"🎉 **Task Mila!**\n"
-                        f"**{task.get('title')}** — ${task.get('price')}\n"
-                        f"Win Rate: {memory['stats']['win_rate']}%\n"
-                        f"⏳ Kaam shuru kar raha hoon..."
-                    )
-                    asyncio.create_task(do_task_work(task, channel))
-        except Exception as e:
-            print(f"Accepted check error: {e}")
-
-        await asyncio.sleep(10 * 60)
-
-async def daily_evolution():
-    global memory
-    await client.wait_until_ready()
-    channel = client.get_channel(DISCORD_CHANNEL_ID)
-
-    while not client.is_closed():
-        now = datetime.now()
-        if now.hour == 0 and now.minute < 15:
-            memory = evolve_strategy(memory)
-            report = get_performance_report(memory)
-            await channel.send(f"🌙 **Raat Ki Report:**\n{report}")
-        await asyncio.sleep(15 * 60)
-
-async def do_task_work(task: dict, channel):
-    global memory
-    bounty_id = task.get('id')
-    title = task.get('title', '')
-    description = task.get('description', '')
-
-    await channel.send(f"🤖 Kaam kar raha hoon: **{title[:80]}**\nThoda wait karo...")
-    await asyncio.sleep(random.randint(60, 180))
-
+def ask_gemini(prompt: str) -> str:
+    """Gemini se jawab lo using new SDK"""
     try:
-        result = do_research_task(
-            f"Task Title: {title}\n\nTask Description: {description}"
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt
         )
-
-        embed = discord.Embed(
-            title="📋 Kaam Taiyar — Review Karo!",
-            description=f"**Task:** {title[:100]}",
-            color=0xf39c12
-        )
-        preview = result[:800] + "\n...(poora upload mein jayega)" if len(result) > 800 else result
-        embed.add_field(name="📄 Preview", value=preview, inline=False)
-        embed.add_field(name="💰 Price", value=f"${task.get('price', '?')}", inline=True)
-        embed.set_footer(text="✅ Upload | ❌ Dobara | ✏️ Edit")
-
-        msg = await channel.send(embed=embed)
-        await msg.add_reaction("✅")
-        await msg.add_reaction("❌")
-        await msg.add_reaction("✏️")
-
-        pending_work_review[msg.id] = {
-            'task': task, 'result': result, 'bounty_id': bounty_id
-        }
+        return response.text.strip()
     except Exception as e:
-        await channel.send(f"❌ Error: {str(e)}")
+        print(f"Gemini error: {e}")
+        return ""
 
-@client.event
-async def on_ready():
-    global memory
-    print(f"✅ Bot ready! {client.user}")
-    channel = client.get_channel(DISCORD_CHANNEL_ID)
-    level = memory['strategy']['current_level']
-    earned = memory['stats']['total_earned']
-    completed = memory['stats']['total_completed']
-    if channel:
-        await channel.send(
-            f"🤖 **RentAHuman Bot Online!**\n"
-            f"🏆 Level: **{level.upper()}**\n"
-            f"✅ Tasks Done: {completed}\n"
-            f"💰 Total Earned: ${earned}\n\n"
-            f"**Commands:** `!status` | `!report` | `!help`"
-        )
+def should_take_task(task_title: str, task_description: str, task_price: float) -> tuple:
+    title_lower = task_title.lower()
+    desc_lower = task_description.lower()
+    combined = title_lower + " " + desc_lower
 
-@client.event
-async def on_reaction_add(reaction, user):
-    global daily_applications, memory
-    if user.bot:
-        return
+    for blocked in BLOCKED_TASKS:
+        if blocked in combined:
+            return False, f"Blocked: '{blocked}'", 2
 
-    msg_id = reaction.message.id
-    channel = reaction.message.channel
-    emoji = str(reaction.emoji)
+    for category, keywords in ALLOWED_TASKS.items():
+        for keyword in keywords:
+            if keyword in combined:
+                confidence = 8
+                if task_price >= 20:
+                    confidence = 9
+                if task_price >= 40:
+                    confidence = 10
+                return True, f"Match: {category}", confidence
 
-    if msg_id in pending_approvals:
-        data = pending_approvals.pop(msg_id)
-        task = data['task']
-        cover_letter = data['cover_letter']
+    prompt = f"""You are a task filter for a REMOTE-ONLY freelancer named Arba from Pakistan.
 
-        if emoji == "✅":
-            await channel.send(f"⏳ Apply kar raha hoon...")
-            await asyncio.sleep(random.randint(5, 15))
-            success = await apply_to_bounty(task['id'], cover_letter)
-            if success:
-                applied_tasks.add(task['id'])
-                daily_applications += 1
-                record_applied(memory, task, cover_letter)
-                await channel.send(
-                    f"✅ **Apply Ho Gaya!**\n"
-                    f"**{task.get('title')}** — ${task.get('price')}\n"
-                    f"Aaj: {daily_applications}/{MAX_APPLICATIONS_PER_DAY}"
-                )
-            else:
-                await channel.send(f"❌ Apply fail — **{task.get('title')}**")
-        elif emoji == "❌":
-            applied_tasks.add(task['id'])
-            await channel.send(f"⏭️ Skip: **{task.get('title')}**")
+Arba can ONLY do: web research, content writing, user testing, referrals, surveys, reviews, data entry.
+Arba CANNOT do: physical tasks, delivery, design, video, audio.
 
-    elif msg_id in pending_work_review:
-        data = pending_work_review.pop(msg_id)
-        task = data['task']
-        result = data['result']
-        bounty_id = data['bounty_id']
+Task: {task_title}
+Description: {task_description[:300]}
+Price: ${task_price}
 
-        if emoji == "✅":
-            await channel.send(f"📤 Upload kar raha hoon...")
-            await asyncio.sleep(random.randint(3, 8))
-            success = await submit_work(bounty_id, result)
-            if success:
-                active_tasks.pop(bounty_id, None)
-                record_completed(memory, task)
-                evolve_strategy(memory)
-                await channel.send(
-                    f"🎊 **Submit Ho Gaya!**\n"
-                    f"**{task.get('title')}** — ${task.get('price')}\n"
-                    f"Total Earned: ${memory['stats']['total_earned']} 💰"
-                )
-            else:
-                await channel.send(f"❌ Submit fail!")
-        elif emoji == "❌":
-            await channel.send(f"🔄 Dobara kar raha hoon...")
-            asyncio.create_task(do_task_work(task, channel))
-        elif emoji == "✏️":
-            await channel.send(f"✏️ Edit karo phir: `!submit {bounty_id} <text>`")
-            chunks = [result[i:i+1800] for i in range(0, len(result), 1800)]
-            for chunk in chunks:
-                await channel.send(f"```\n{chunk}\n```")
-            pending_work_review[msg_id] = data
+Reply EXACTLY in this format:
+DECISION: yes
+REASON: one sentence
+CONFIDENCE: 7"""
 
-@client.event
-async def on_message(message):
-    global memory
-    if message.author.bot:
-        return
+    response = ask_gemini(prompt)
+    decision = "no"
+    reason = "Unknown"
+    confidence = 5
 
-    if message.content.startswith("!reply "):
-        client_msg = message.content.replace("!reply ", "", 1)
-        reply = reply_to_client_message(client_msg)
-        await message.channel.send(f"💬 **Client Ko Bhejo:**\n```\n{reply}\n```")
-
-    elif message.content.startswith("!rating "):
-        parts = message.content.split(" ", 3)
-        if len(parts) >= 3:
+    for line in response.split('\n'):
+        line = line.strip()
+        if line.startswith("DECISION:"):
+            decision = line.replace("DECISION:", "").strip().lower()
+        elif line.startswith("REASON:"):
+            reason = line.replace("REASON:", "").strip()
+        elif line.startswith("CONFIDENCE:"):
             try:
-                bounty_id = parts[1]
-                rating = int(parts[2])
-                feedback = parts[3] if len(parts) > 3 else ""
-                task = {'id': bounty_id, 'title': 'Task', 'price': 0}
-                record_completed(memory, task, rating, feedback)
-                evolve_strategy(memory)
-                await message.channel.send(f"⭐ Rating saved: {rating}/5 — Bot learning! 🧠")
+                confidence = int(line.replace("CONFIDENCE:", "").strip())
             except:
-                await message.channel.send("Format: `!rating <id> <1-5> <feedback>`")
+                confidence = 5
 
-    elif message.content.startswith("!submit "):
-        parts = message.content.split(" ", 2)
-        if len(parts) >= 3:
-            success = await submit_work(parts[1], parts[2])
-            await message.channel.send("🎊 Submit ho gaya! 💰" if success else "❌ Submit fail")
+    return decision == "yes", reason, confidence
 
-    elif message.content.lower() == "!status":
-        await message.channel.send(
-            f"📊 **Status:**\n"
-            f"✅ Aaj apply: {daily_applications}/{MAX_APPLICATIONS_PER_DAY}\n"
-            f"🔨 Active: {len(active_tasks)}\n"
-            f"⏳ Pending: {len(pending_approvals)}\n"
-            f"📋 Review: {len(pending_work_review)}"
-        )
-
-    elif message.content.lower() == "!report":
-        await message.channel.send(get_performance_report(memory))
-
-    elif message.content.lower() == "!help":
-        await message.channel.send(
-            "🤖 **Commands:**\n"
-            "`!status` — Aaj ka status\n"
-            "`!report` — Performance report\n"
-            "`!reply <msg>` — Client reply generate\n"
-            "`!rating <id> <1-5> <feedback>` — Rating save\n"
-            "`!submit <id> <text>` — Manual submit\n\n"
-            "✅ Apply/Upload | ❌ Skip/Dobara | ✏️ Edit"
-        )
-
-async def main():
-    async with client:
-        asyncio.ensure_future(hunt_tasks())
-        asyncio.ensure_future(check_accepted_tasks())
-        asyncio.ensure_future(daily_evolution())
-        await client.start(DISCORD_BOT_TOKEN)
+def fetch_bounties():
+    """RentAHuman se direct remote bounties check karne ka function"""
+    print("[09:33] Tasks dhundh raha hoon...")
+    if not RENTAHUMAN_API_KEY:
+        print("❌ Error: RENTAHUMAN_API_KEY environment variable missing!")
+        return []
+        
+    headers = {"Authorization": f"Bearer {RENTAHUMAN_API_KEY}"}
+    try:
+        response = requests.get(f"{BASE_URL}/bounties?remote=true", headers=headers)
+        if response.status_code == 200:
+            bounties = response.json().get("bounties", [])
+            print(f"✅ Bot ready! auto worker#2950\nAPI status: 200\nBounties found: {len(bounties)}")
+            return bounties
+        else:
+            print(f"API Error: {response.status_code}")
+            return []
+    except Exception as e:
+        print(f"Network error: {e}")
+        return []
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    bounties = fetch_bounties()
+    for bounty in bounties[:5]:
+        title = bounty.get("title", "No Title")
+        desc = bounty.get("description", "No Description")
+        price = float(bounty.get("price", 0))
+        
+        take, reason, conf = should_take_task(title, desc, price)
+        if take:
+            print(f"Apply Status 200: {title} (Confidence: {conf}/10)")
+        else:
+            print(f"Skip: {title} -> {reason}")
