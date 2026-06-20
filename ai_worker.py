@@ -52,7 +52,7 @@ BLOCKED_TASKS = [
 def ask_gemini(prompt: str, max_words: int = 200) -> str:
     """Gemini se jawab lo"""
     try:
-        response = client_ai.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        response = client_ai.models.generate_content(model="gemini-1.5-flash-8b", contents=prompt)
         return response.text.strip()
     except Exception as e:
         print(f"Gemini error: {e}")
