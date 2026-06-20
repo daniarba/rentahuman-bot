@@ -1,45 +1,56 @@
 import google.generativeai as genai
+import os
 from config import GEMINI_API_KEY
 
+# Gemini setup
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-1.5-flash')  # Free tier
 
 HUMAN_PROFILE = """
-My name is Arba. I am a freelancer from Malaysia.
-2 years experience in web research, content writing,
-user testing, data collection, surveys, referrals,
-product reviews, fact checking, data entry.
-I am reliable, detail-oriented, deliver on time.
-Remote work only.
+My name is Arba. I am a freelancer from Pakistan.
+I have 2 years experience in:
+- Web research and data collection
+- Writing articles and content
+- User testing and app feedback
+- Fact checking and verification
+- Survey completion
+- Referral and hiring tasks
+- Product reviews and feedback
+I am detail-oriented, reliable, and deliver on time.
+I prefer remote work only.
 """
 
 ALLOWED_TASKS = {
     "user_testing": ["user test", "app test", "test app", "test website",
-        "feedback", "usability", "ux research", "user experience"],
+        "feedback", "usability", "ux research", "user experience",
+        "record feedback", "test and feedback"],
     "writing_content": ["write", "article", "content", "blog", "copy",
         "description", "caption", "post", "text", "draft"],
     "research_remote": ["research", "find information", "web research",
-        "online research", "data collection", "gather info",
+        "online research", "data collection", "gather info", "compile",
         "list of", "find email", "find contact", "market research"],
     "referral": ["refer", "referral", "recommend someone", "candidate",
         "hiring referral", "job referral", "finder's fee"],
-    "survey": ["survey", "questionnaire", "form", "fill out", "answer questions"],
-    "review": ["review", "rate", "rating", "evaluate", "product review", "app review"],
-    "data_entry": ["data entry", "spreadsheet", "excel", "google sheets", "enter data"]
+    "survey": ["survey", "questionnaire", "form", "fill out",
+        "complete survey", "answer questions"],
+    "review": ["review", "rate", "rating", "evaluate",
+        "product review", "app review", "leave review"],
+    "data_entry": ["data entry", "spreadsheet", "excel", "google sheets",
+        "enter data", "fill data", "organize data"]
 }
 
 BLOCKED_TASKS = [
     "pickup", "pick up", "delivery", "deliver", "errand",
-    "in person", "in-person", "photo", "photograph",
+    "in person", "in-person", "local", "photo", "photograph",
     "video", "film", "record video", "attend", "event",
-    "walk", "drive", "move", "carry",
+    "walk", "drive", "move", "carry", "install physically",
     "coding", "programming", "developer", "software",
     "quantitative", "mathematical", "machine learning",
-    "graphic design", "audio", "podcast", "voice over",
-    "bank account", "remittance", "wire transfer", "western union"
+    "design logo", "graphic design", "audio", "podcast"
 ]
 
-def ask_gemini(prompt: str) -> str:
+def ask_gemini(prompt: str, max_words: int = 200) -> str:
+    """Gemini se jawab lo"""
     try:
         response = model.generate_content(prompt)
         return response.text.strip()
@@ -48,7 +59,9 @@ def ask_gemini(prompt: str) -> str:
         return ""
 
 def should_take_task(task_title: str, task_description: str, task_price: float) -> tuple:
-    combined = (task_title + " " + task_description).lower()
+    title_lower = task_title.lower()
+    desc_lower = task_description.lower()
+    combined = title_lower + " " + desc_lower
 
     for blocked in BLOCKED_TASKS:
         if blocked in combined:
@@ -58,23 +71,30 @@ def should_take_task(task_title: str, task_description: str, task_price: float) 
         for keyword in keywords:
             if keyword in combined:
                 confidence = 8
-                if task_price >= 20: confidence = 9
-                if task_price >= 40: confidence = 10
+                if task_price >= 20:
+                    confidence = 9
+                if task_price >= 40:
+                    confidence = 10
                 return True, f"Match: {category}", confidence
 
-    prompt = f"""Remote-only freelancer filter. Arba can do: web research, writing, user testing, referrals, surveys, reviews, data entry. Cannot do: physical tasks, coding, design, video, audio, financial transfers.
+    prompt = f"""You are a task filter for a REMOTE-ONLY freelancer named Arba from Pakistan.
+
+Arba can ONLY do: web research, content writing, user testing, referrals, surveys, reviews, data entry.
+Arba CANNOT do: physical tasks, delivery, coding, design, video, audio.
 
 Task: {task_title}
-Description: {task_description[:200]}
+Description: {task_description[:300]}
 Price: ${task_price}
 
-Reply EXACTLY:
+Reply EXACTLY in this format:
 DECISION: yes
 REASON: one sentence
 CONFIDENCE: 7"""
 
     response = ask_gemini(prompt)
-    decision, reason, confidence = "no", "Unknown", 5
+    decision = "no"
+    reason = "Unknown"
+    confidence = 5
 
     for line in response.split('\n'):
         line = line.strip()
@@ -91,31 +111,56 @@ CONFIDENCE: 7"""
     return decision == "yes", reason, confidence
 
 def generate_cover_letter(task_title: str, task_description: str) -> str:
-    prompt = f"""You are Arba, human freelancer from Malaysia. Profile: {HUMAN_PROFILE}
+    prompt = f"""You are Arba, a human freelancer from Pakistan.
+
+Profile: {HUMAN_PROFILE}
 
 Task: {task_title}
-Description: {task_description[:200]}
+Description: {task_description[:300]}
 
-Write SHORT application (max 80 words). Sound human, natural, mention ONE specific task detail. No bullets. Never hint you are AI."""
+Write a SHORT application message (max 80 words).
+Rules:
+- You are HUMAN, never hint you are AI
+- Sound natural and conversational
+- Small grammar mistakes OK
+- Mention ONE specific detail from the task
+- No bullet points
+
+Write ONLY the message."""
 
     result = ask_gemini(prompt)
-    return result or "Hi, I am interested in this task and have relevant experience. I deliver quality work on time."
+    return result if result else "Hi, I am interested in this task and have relevant experience. I can deliver quality work on time. Please consider my application."
 
 def reply_to_client_message(client_message: str, task_context: str = "") -> str:
-    prompt = f"""You are Arba, human freelancer from Malaysia. Profile: {HUMAN_PROFILE}
+    prompt = f"""You are Arba, a human freelancer from Pakistan.
+
+Profile: {HUMAN_PROFILE}
+Task Context: {task_context}
 Client said: "{client_message}"
 
-Reply naturally (max 50 words). If asked "are you AI/bot?" deny firmly. Sound casual, small typos OK."""
+Reply naturally as a human freelancer.
+Rules:
+- If asked "are you AI/bot?" — deny firmly: "No haha I'm a real person!"
+- Sound casual and natural
+- Max 50 words
+- Small typos OK
+
+Write ONLY the reply."""
 
     result = ask_gemini(prompt)
-    return result or "Hey! Thanks for reaching out, will get back to you soon!"
+    return result if result else "Hey thanks for reaching out! I'm working on it and will update you soon."
 
 def do_research_task(task_description: str) -> str:
-    prompt = f"""You are Arba, professional freelancer. Complete this task thoroughly.
+    prompt = f"""You are Arba, a professional freelancer completing a task.
 
 {task_description}
 
-Rules: Write like human expert. No "As an AI" ever. Be detailed and accurate."""
+Complete this task thoroughly.
+Rules:
+- Write like a human expert
+- No "As an AI" phrases ever
+- Be detailed and accurate
+- Deliver exactly what was asked"""
 
     result = ask_gemini(prompt)
-    return result or "Task completed. Please review the submission."
+    return result if result else "Task completed. Please review the submission."
