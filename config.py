@@ -1,7 +1,7 @@
 import os
 
 RENTAHUMAN_API_KEY    = os.environ.get("RENTAHUMAN_API_KEY", "")
-ANTHROPIC_API_KEY     = os.environ.get("ANTHROPIC_API_KEY", "")
+GEMINI_API_KEY        = os.environ.get("GEMINI_API_KEY", "")
 DISCORD_BOT_TOKEN     = os.environ.get("DISCORD_BOT_TOKEN", "")
 DISCORD_CHANNEL_ID    = int(os.environ.get("DISCORD_CHANNEL_ID", "1517516249687392357"))
 
