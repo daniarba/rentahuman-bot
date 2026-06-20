@@ -23,8 +23,40 @@ pending_approvals = {}
 pending_work_review = {}
 active_tasks = {}
 
+# Tasks jo bot lega
+ALLOWED_KEYWORDS = [
+    "research", "writing", "data", "survey",
+    "fact", "content", "review", "feedback",
+    "search", "collection", "summary", "article"
+]
+
+# Tasks jo bot ignore karega
+BLOCKED_KEYWORDS = [
+    "coding", "programming", "design", "quantitative",
+    "mathematical", "video", "audio", "develop", "software"
+]
+
+def is_task_allowed(task):
+    """Check karo ye task karna chahiye ya nahi"""
+    title = task.get('title', '').lower()
+    description = task.get('description', '').lower()
+    text = title + " " + description
+
+    for blocked in BLOCKED_KEYWORDS:
+        if blocked in text:
+            return False
+
+    for allowed in ALLOWED_KEYWORDS:
+        if allowed in text:
+            return True
+
+    return True  # Default: try karo
+
 async def fetch_open_bounties():
-    headers = {"Authorization": f"Bearer {RENTAHUMAN_API_KEY}"}
+    headers = {
+        "Authorization": f"Bearer {RENTAHUMAN_API_KEY}",
+        "Content-Type": "application/json"
+    }
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(
@@ -32,27 +64,59 @@ async def fetch_open_bounties():
                 headers=headers,
                 params={"status": "open"}
             ) as resp:
-                return await resp.json() if resp.status == 200 else []
+                print(f"Bounties API status: {resp.status}")
+                if resp.status == 200:
+                    data = await resp.json()
+                    print(f"API response type: {type(data)}")
+                    # Handle different response formats
+                    if isinstance(data, list):
+                        return data
+                    elif isinstance(data, dict):
+                        # Try common keys
+                        return (data.get('bounties') or
+                                data.get('data') or
+                                data.get('results') or
+                                data.get('items') or [])
+                    else:
+                        print(f"Unexpected response: {data}")
+                        return []
+                else:
+                    text = await resp.text()
+                    print(f"API Error {resp.status}: {text[:200]}")
+                    return []
         except Exception as e:
             print(f"Fetch error: {e}")
             return []
 
 async def fetch_accepted_tasks():
-    headers = {"Authorization": f"Bearer {RENTAHUMAN_API_KEY}"}
+    headers = {
+        "Authorization": f"Bearer {RENTAHUMAN_API_KEY}",
+        "Content-Type": "application/json"
+    }
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(
                 "https://rentahuman.ai/api/bounties/assigned",
                 headers=headers
             ) as resp:
-                return await resp.json() if resp.status == 200 else []
+                if resp.status == 200:
+                    data = await resp.json()
+                    if isinstance(data, list):
+                        return data
+                    elif isinstance(data, dict):
+                        return (data.get('bounties') or
+                                data.get('data') or
+                                data.get('results') or [])
+                return []
         except Exception as e:
             print(f"Accepted tasks fetch error: {e}")
             return []
 
 async def apply_to_bounty(bounty_id: str, cover_letter: str):
-    headers = {"Authorization": f"Bearer {RENTAHUMAN_API_KEY}",
-               "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {RENTAHUMAN_API_KEY}",
+        "Content-Type": "application/json"
+    }
     async with aiohttp.ClientSession() as session:
         try:
             async with session.post(
@@ -60,14 +124,17 @@ async def apply_to_bounty(bounty_id: str, cover_letter: str):
                 headers=headers,
                 json={"message": cover_letter}
             ) as resp:
-                return resp.status == 200
+                print(f"Apply status: {resp.status}")
+                return resp.status in [200, 201]
         except Exception as e:
             print(f"Apply error: {e}")
             return False
 
 async def submit_work(bounty_id: str, result_text: str):
-    headers = {"Authorization": f"Bearer {RENTAHUMAN_API_KEY}",
-               "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {RENTAHUMAN_API_KEY}",
+        "Content-Type": "application/json"
+    }
     async with aiohttp.ClientSession() as session:
         try:
             async with session.post(
@@ -75,7 +142,7 @@ async def submit_work(bounty_id: str, result_text: str):
                 headers=headers,
                 json={"submission": result_text}
             ) as resp:
-                return resp.status == 200
+                return resp.status in [200, 201]
         except Exception as e:
             print(f"Submit error: {e}")
             return False
@@ -95,13 +162,17 @@ async def hunt_tasks():
 
             print(f"[{datetime.now().strftime('%H:%M')}] Tasks dhundh raha hoon...")
             bounties = await fetch_open_bounties()
+            print(f"Total bounties mili: {len(bounties)}")
 
-            new_tasks = [
-                b for b in bounties
-                if b.get('id') not in applied_tasks
-                and b.get('status') == 'open'
-                and b.get('price', 0) >= MIN_TASK_PRICE
-            ]
+            new_tasks = []
+            for b in bounties:
+                if not isinstance(b, dict):
+                    continue
+                if (b.get('id') not in applied_tasks
+                        and b.get('status') == 'open'
+                        and b.get('price', 0) >= MIN_TASK_PRICE
+                        and is_task_allowed(b)):
+                    new_tasks.append(b)
 
             if new_tasks:
                 await channel.send(f"🔍 **{len(new_tasks)} naye tasks mile!**")
@@ -116,7 +187,7 @@ async def hunt_tasks():
                     )
                     embed.add_field(name="💰 Price", value=f"${task.get('price', '?')}", inline=True)
                     embed.add_field(name="⏰ Deadline", value=task.get('deadline', 'N/A'), inline=True)
-                    embed.add_field(name="📝 Task", value=task.get('description', '')[:300] + "...", inline=False)
+                    embed.add_field(name="📝 Task", value=str(task.get('description', ''))[:300] + "...", inline=False)
                     embed.add_field(name="✉️ Cover Letter", value=cover_letter[:500], inline=False)
                     embed.set_footer(text="✅ = Apply karo  |  ❌ = Skip karo")
 
@@ -126,7 +197,7 @@ async def hunt_tasks():
                     pending_approvals[msg.id] = {'task': task, 'cover_letter': cover_letter}
                     await asyncio.sleep(random.randint(30, 90))
             else:
-                print("Koi naya task nahi mila.")
+                print("Koi naya matching task nahi mila.")
 
         except Exception as e:
             print(f"Hunt error: {e}")
@@ -141,6 +212,8 @@ async def check_accepted_tasks():
         try:
             accepted = await fetch_accepted_tasks()
             for task in accepted:
+                if not isinstance(task, dict):
+                    continue
                 bounty_id = task.get('id')
                 if bounty_id and bounty_id not in active_tasks:
                     active_tasks[bounty_id] = task
@@ -198,7 +271,7 @@ async def on_ready():
         await channel.send(
             "🤖 **RentAHuman Bot Online!**\n\n"
             "🔍 Har 15 min — naye tasks dhundhunga\n"
-            "🤖 Kaam khud karunga\n"
+            "🤖 Sirf Research/Writing/Data tasks lunga\n"
             "📋 Kaam ready hone pe review maangunga\n"
             "✅ Tumhari haan pe upload karunga\n\n"
             "**Commands:** `!status` | `!help`"
