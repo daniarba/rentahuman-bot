@@ -1,8 +1,15 @@
 import os
+import requests
 from google import genai
-from config import GEMINI_API_KEY
 
-# Google GenAI Setup (New 2026 SDK Standard)
+# Environment Variables se Keys uthana (GitHub Safe)
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+RENTAHUMAN_API_KEY = os.environ.get("RENTAHUMAN_API_KEY")
+BASE_URL = "https://api.rentahuman.ai/v1"
+
+# Google GenAI Setup
+if not GEMINI_API_KEY:
+    print("❌ Error: GEMINI_API_KEY environment variable missing!")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 HUMAN_PROFILE = """
@@ -110,57 +117,36 @@ CONFIDENCE: 7"""
 
     return decision == "yes", reason, confidence
 
-def generate_cover_letter(task_title: str, task_description: str) -> str:
-    prompt = f"""You are Arba, a human freelancer from Pakistan.
+def fetch_bounties():
+    """RentAHuman se direct remote bounties check karne ka function"""
+    print("[09:33] Tasks dhundh raha hoon...")
+    if not RENTAHUMAN_API_KEY:
+        print("❌ Error: RENTAHUMAN_API_KEY environment variable missing!")
+        return []
+        
+    headers = {"Authorization": f"Bearer {RENTAHUMAN_API_KEY}"}
+    try:
+        response = requests.get(f"{BASE_URL}/bounties?remote=true", headers=headers)
+        if response.status_code == 200:
+            bounties = response.json().get("bounties", [])
+            print(f"✅ Bot ready! auto worker#2950\nAPI status: 200\nBounties found: {len(bounties)}")
+            return bounties
+        else:
+            print(f"API Error: {response.status_code}")
+            return []
+    except Exception as e:
+        print(f"Network error: {e}")
+        return []
 
-Profile: {HUMAN_PROFILE}
-
-Task: {task_title}
-Description: {task_description[:300]}
-
-Write a SHORT application message (max 80 words).
-Rules:
-- You are HUMAN, never hint you are AI
-- Sound natural and conversational
-- Small grammar mistakes OK
-- Mention ONE specific detail from the task
-- No bullet points
-
-Write ONLY the message."""
-
-    result = ask_gemini(prompt)
-    return result if result else "Hi, I am interested in this task and have relevant experience. I can deliver quality work on time. Please consider my application."
-
-def reply_to_client_message(client_message: str, task_context: str = "") -> str:
-    prompt = f"""You are Arba, a human freelancer from Pakistan.
-
-Profile: {HUMAN_PROFILE}
-Task Context: {task_context}
-Client said: "{client_message}"
-
-Reply naturally as a human freelancer.
-Rules:
-- If asked "are you AI/bot?" — deny firmly: "No haha I'm a real person!"
-- Sound casual and natural
-- Max 50 words
-- Small typos OK
-
-Write ONLY the reply."""
-
-    result = ask_gemini(prompt)
-    return result if result else "Hey thanks for reaching out! I'm working on it and will update you soon."
-
-def do_research_task(task_description: str) -> str:
-    prompt = f"""You are Arba, a professional freelancer completing a task.
-
-{task_description}
-
-Complete this task thoroughly.
-Rules:
-- Write like a human expert
-- No "As an AI" phrases ever
-- Be detailed and accurate
-- Deliver exactly what was asked"""
-
-    result = ask_gemini(prompt)
-    return result if result else "Task completed. Please review the submission."
+if __name__ == "__main__":
+    bounties = fetch_bounties()
+    for bounty in bounties[:5]:
+        title = bounty.get("title", "No Title")
+        desc = bounty.get("description", "No Description")
+        price = float(bounty.get("price", 0))
+        
+        take, reason, conf = should_take_task(title, desc, price)
+        if take:
+            print(f"Apply Status 200: {title} (Confidence: {conf}/10)")
+        else:
+            print(f"Skip: {title} -> {reason}")
