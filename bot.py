@@ -30,14 +30,13 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 
 applied_tasks = set()
-seen_task_ids = set()   # Pehle dekhe tasks — dobara notify mat karo
+seen_task_ids = set()
 daily_applications = 0
 pending_approvals = {}
 pending_work_review = {}
 active_tasks = {}
 memory = load_memory()
 
-# Fixed headers — Brotli disable
 API_HEADERS = {
     "Authorization": f"Bearer {RENTAHUMAN_API_KEY}",
     "Content-Type": "application/json",
@@ -52,13 +51,11 @@ async def fetch_open_bounties():
                 "https://rentahuman.ai/api/bounties",
                 headers=API_HEADERS
             ) as resp:
-                print(f"API status: {resp.status}")
                 if resp.status == 200:
                     data = await resp.json(content_type=None)
-                    # API returns {"success": true, "bounties": [...]}
                     if isinstance(data, dict) and data.get('success'):
                         bounties = data.get('bounties', [])
-                        print(f"Bounties found: {len(bounties)}")
+                        print(f"API status: {resp.status} | Bounties found: {len(bounties)}")
                         return bounties
                     elif isinstance(data, list):
                         return data
@@ -93,7 +90,6 @@ async def apply_to_bounty(bounty_id: str, cover_letter: str):
                 headers=API_HEADERS,
                 json={"message": cover_letter}
             ) as resp:
-                print(f"Apply status: {resp.status}")
                 return resp.status in [200, 201]
         except Exception as e:
             print(f"Apply error: {e}")
@@ -125,26 +121,24 @@ async def hunt_tasks():
                 daily_applications = 0
                 continue
 
-            print(f"[{datetime.now().strftime('%H:%M')}] Tasks dhundh raha hoon...")
-
+            print(f"Tasks dhundh raha hoon...")
             min_price = memory['strategy']['min_price']
             preferred = memory['strategy']['preferred_categories']
             avoided = memory['strategy']['avoided_categories']
 
             bounties = await fetch_open_bounties()
-
             found_new = False
+
             for b in bounties:
                 if not isinstance(b, dict):
                     continue
 
                 task_id = b.get('id')
 
-                # Pehle dekha hua task — skip (Discord pe dobara notify mat karo)
+                # Sirf naye tasks
                 if task_id in seen_task_ids:
                     continue
-
-                seen_task_ids.add(task_id)  # Pehli baar dekha — yaad rakho
+                seen_task_ids.add(task_id)
 
                 if task_id in applied_tasks:
                     continue
@@ -153,11 +147,10 @@ async def hunt_tasks():
                 if b.get('price', 0) < min_price:
                     continue
 
-                # Remote only
+                # Remote only check
                 location = b.get('location', {})
                 if isinstance(location, dict):
                     if not location.get('isRemoteAllowed', False):
-                        print(f"Not remote: {b.get('title')}")
                         continue
 
                 category = b.get('category', '').lower()
@@ -174,7 +167,7 @@ async def hunt_tasks():
                     confidence = min(10, confidence + 2)
 
                 if not take or confidence < 6:
-                    print(f"Skip: {b.get('title')} ({confidence}/10)")
+                    print(f"SKIPPED: {b.get('title')} -> {reason}")
                     applied_tasks.add(task_id)
                     continue
 
@@ -193,7 +186,7 @@ async def hunt_tasks():
                 embed.add_field(name="🧠 AI Score", value=f"{confidence}/10 — {reason}", inline=False)
                 embed.add_field(name="📝 Task", value=str(b.get('description', ''))[:300] + "...", inline=False)
                 embed.add_field(name="✉️ Cover Letter", value=cover_letter[:400], inline=False)
-                embed.set_footer(text="✅ Apply | ❌ Skip")
+                embed.set_footer(text="✅ Apply karo  |  ❌ Skip karo")
 
                 msg = await channel.send(embed=embed)
                 await msg.add_reaction("✅")
@@ -201,13 +194,11 @@ async def hunt_tasks():
                 pending_approvals[msg.id] = {'task': b, 'cover_letter': cover_letter}
                 await asyncio.sleep(random.randint(30, 90))
 
+            if not found_new:
+                print("Koi naya task nahi mila — next check 15 min mein")
+
         except Exception as e:
             print(f"Hunt error: {e}")
-            import traceback
-            traceback.print_exc()
-
-        if not found_new:
-            print("Koi naya task nahi mila — next check 15 min mein")
 
         await asyncio.sleep(CHECK_INTERVAL_MINUTES * 60)
 
@@ -235,14 +226,12 @@ async def check_accepted_tasks():
                     asyncio.create_task(do_task_work(task, channel))
         except Exception as e:
             print(f"Accepted check error: {e}")
-
         await asyncio.sleep(10 * 60)
 
 async def daily_evolution():
     global memory
     await client.wait_until_ready()
     channel = client.get_channel(DISCORD_CHANNEL_ID)
-
     while not client.is_closed():
         now = datetime.now()
         if now.hour == 0 and now.minute < 15:
@@ -264,7 +253,6 @@ async def do_task_work(task: dict, channel):
         result = do_research_task(
             f"Task Title: {title}\n\nTask Description: {description}"
         )
-
         embed = discord.Embed(
             title="📋 Kaam Taiyar — Review Karo!",
             description=f"**Task:** {title[:100]}",
@@ -273,7 +261,7 @@ async def do_task_work(task: dict, channel):
         preview = result[:800] + "\n...(poora upload mein jayega)" if len(result) > 800 else result
         embed.add_field(name="📄 Preview", value=preview, inline=False)
         embed.add_field(name="💰 Price", value=f"${task.get('price', '?')}", inline=True)
-        embed.set_footer(text="✅ Upload | ❌ Dobara | ✏️ Edit")
+        embed.set_footer(text="✅ Upload | ❌ Dobara karo | ✏️ Edit karke upload")
 
         msg = await channel.send(embed=embed)
         await msg.add_reaction("✅")
@@ -319,7 +307,7 @@ async def on_reaction_add(reaction, user):
         cover_letter = data['cover_letter']
 
         if emoji == "✅":
-            await channel.send(f"⏳ Apply kar raha hoon...")
+            await channel.send(f"⏳ Apply kar raha hoon: **{task.get('title')}**...")
             await asyncio.sleep(random.randint(5, 15))
             success = await apply_to_bounty(task['id'], cover_letter)
             if success:
@@ -329,7 +317,8 @@ async def on_reaction_add(reaction, user):
                 await channel.send(
                     f"✅ **Apply Ho Gaya!**\n"
                     f"**{task.get('title')}** — ${task.get('price')}\n"
-                    f"Aaj: {daily_applications}/{MAX_APPLICATIONS_PER_DAY}"
+                    f"Aaj: {daily_applications}/{MAX_APPLICATIONS_PER_DAY}\n"
+                    f"_Client ke reply ka wait karo..._"
                 )
             else:
                 await channel.send(f"❌ Apply fail — **{task.get('title')}**")
@@ -354,15 +343,17 @@ async def on_reaction_add(reaction, user):
                 await channel.send(
                     f"🎊 **Submit Ho Gaya!**\n"
                     f"**{task.get('title')}** — ${task.get('price')}\n"
-                    f"Total Earned: ${memory['stats']['total_earned']} 💰"
+                    f"💰 Total Earned: ${memory['stats']['total_earned']}\n"
+                    f"_Payment ka wait karo!_\n\n"
+                    f"_Rating aane pe: `!rating {bounty_id} 5 feedback`_"
                 )
             else:
-                await channel.send(f"❌ Submit fail!")
+                await channel.send(f"❌ Submit fail — manually check karo!")
         elif emoji == "❌":
             await channel.send(f"🔄 Dobara kar raha hoon...")
             asyncio.create_task(do_task_work(task, channel))
         elif emoji == "✏️":
-            await channel.send(f"✏️ Edit karo phir: `!submit {bounty_id} <text>`")
+            await channel.send(f"✏️ Edit karo phir: `!submit {bounty_id} <edited text>`")
             chunks = [result[i:i+1800] for i in range(0, len(result), 1800)]
             for chunk in chunks:
                 await channel.send(f"```\n{chunk}\n```")
@@ -389,7 +380,11 @@ async def on_message(message):
                 task = {'id': bounty_id, 'title': 'Task', 'price': 0}
                 record_completed(memory, task, rating, feedback)
                 evolve_strategy(memory)
-                await message.channel.send(f"⭐ Rating saved: {rating}/5 — Bot learning! 🧠")
+                await message.channel.send(
+                    f"⭐ Rating saved: {rating}/5\n"
+                    f"Avg: {memory['stats']['avg_client_rating']}/5\n"
+                    f"Bot learning! 🧠"
+                )
             except:
                 await message.channel.send("Format: `!rating <id> <1-5> <feedback>`")
 
@@ -397,15 +392,18 @@ async def on_message(message):
         parts = message.content.split(" ", 2)
         if len(parts) >= 3:
             success = await submit_work(parts[1], parts[2])
-            await message.channel.send("🎊 Submit ho gaya! 💰" if success else "❌ Submit fail")
+            await message.channel.send(
+                "🎊 Submit ho gaya! 💰" if success else "❌ Submit fail"
+            )
 
     elif message.content.lower() == "!status":
         await message.channel.send(
             f"📊 **Status:**\n"
             f"✅ Aaj apply: {daily_applications}/{MAX_APPLICATIONS_PER_DAY}\n"
-            f"🔨 Active: {len(active_tasks)}\n"
-            f"⏳ Pending: {len(pending_approvals)}\n"
-            f"📋 Review: {len(pending_work_review)}"
+            f"🔨 Active tasks: {len(active_tasks)}\n"
+            f"⏳ Apply pending: {len(pending_approvals)}\n"
+            f"📋 Review pending: {len(pending_work_review)}\n"
+            f"👁️ Dekhe tasks: {len(seen_task_ids)}"
         )
 
     elif message.content.lower() == "!report":
@@ -415,11 +413,14 @@ async def on_message(message):
         await message.channel.send(
             "🤖 **Commands:**\n"
             "`!status` — Aaj ka status\n"
-            "`!report` — Performance report\n"
+            "`!report` — Poori performance\n"
             "`!reply <msg>` — Client reply generate\n"
             "`!rating <id> <1-5> <feedback>` — Rating save\n"
             "`!submit <id> <text>` — Manual submit\n\n"
-            "✅ Apply/Upload | ❌ Skip/Dobara | ✏️ Edit"
+            "**Reactions:**\n"
+            "✅ Apply / Upload\n"
+            "❌ Skip / Dobara\n"
+            "✏️ Edit karke upload"
         )
 
 async def main():

@@ -1,75 +1,54 @@
-import os
-import requests
-from google import genai
+import google.generativeai as genai
+from config import GEMINI_API_KEY
 
-# Environment Variables (Railway safe)
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-RENTAHUMAN_API_KEY = os.environ.get("RENTAHUMAN_API_KEY")
-BASE_URL = "https://rentahuman.ai/api"
-
-# Google GenAI Setup (Latest SDK)
-if not GEMINI_API_KEY:
-    print("❌ Error: GEMINI_API_KEY environment variable missing!")
-else:
-    client = genai.Client(api_key=GEMINI_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 HUMAN_PROFILE = """
 My name is Arba. I am a freelancer from Malaysia.
-I have 2 years experience in:
-- Web research and data collection
-- Writing articles and content
-- User testing and app feedback
-- Fact checking and verification
-- Survey completion
-- Referral and hiring tasks
-- Product reviews and feedback
-I am detail-oriented, reliable, and deliver on time.
-I prefer remote work only.
+2 years experience in web research, content writing,
+user testing, data collection, surveys, referrals,
+product reviews, fact checking, data entry.
+I am reliable, detail-oriented, deliver on time.
+Remote work only.
 """
 
 ALLOWED_TASKS = {
     "user_testing": ["user test", "app test", "test app", "test website",
-        "feedback", "usability", "ux research", "user experience",
-        "record feedback", "test and feedback"],
+        "feedback", "usability", "ux research", "user experience"],
     "writing_content": ["write", "article", "content", "blog", "copy",
         "description", "caption", "post", "text", "draft"],
     "research_remote": ["research", "find information", "web research",
-        "online research", "data collection", "gather info", "compile",
+        "online research", "data collection", "gather info",
         "list of", "find email", "find contact", "market research"],
     "referral": ["refer", "referral", "recommend someone", "candidate",
         "hiring referral", "job referral", "finder's fee"],
-    "survey": ["survey", "questionnaire", "form", "fill out",
-        "complete survey", "answer questions"],
-    "review": ["review", "rate", "rating", "evaluate",
-        "product review", "app review", "leave review"],
-    "data_entry": ["data entry", "spreadsheet", "excel", "google sheets",
-        "enter data", "fill data", "organize data"]
+    "survey": ["survey", "questionnaire", "form", "fill out", "answer questions"],
+    "review": ["review", "rate", "rating", "evaluate", "product review", "app review"],
+    "data_entry": ["data entry", "spreadsheet", "excel", "google sheets", "enter data"]
 }
 
 BLOCKED_TASKS = [
     "pickup", "pick up", "delivery", "deliver", "errand",
-    "in person", "in-person", "local", "photo", "photograph",
+    "in person", "in-person", "photo", "photograph",
     "video", "film", "record video", "attend", "event",
-    "walk", "drive", "move", "carry", "install physically",
-    "design logo", "graphic design", "audio", "podcast"
+    "walk", "drive", "move", "carry",
+    "coding", "programming", "developer", "software",
+    "quantitative", "mathematical", "machine learning",
+    "graphic design", "audio", "podcast", "voice over",
+    "bank account", "remittance", "wire transfer", "western union"
 ]
 
 def ask_gemini(prompt: str) -> str:
-    """Gemini se jawab lo using new SDK"""
     try:
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt
-        )
+        response = model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
         print(f"Gemini error: {e}")
         return ""
 
 def should_take_task(task_title: str, task_description: str, task_price: float) -> tuple:
-    title_lower = task_title.lower()
-    desc_lower = task_description.lower()
-    combined = title_lower + " " + desc_lower
+    combined = (task_title + " " + task_description).lower()
 
     for blocked in BLOCKED_TASKS:
         if blocked in combined:
@@ -79,30 +58,23 @@ def should_take_task(task_title: str, task_description: str, task_price: float) 
         for keyword in keywords:
             if keyword in combined:
                 confidence = 8
-                if task_price >= 20:
-                    confidence = 9
-                if task_price >= 40:
-                    confidence = 10
+                if task_price >= 20: confidence = 9
+                if task_price >= 40: confidence = 10
                 return True, f"Match: {category}", confidence
 
-    prompt = f"""You are a task filter for a REMOTE-ONLY freelancer named Arba from Malaysia.
-
-Arba can ONLY do: web research, content writing, user testing, referrals, surveys, reviews, data entry.
-Arba CANNOT do: physical tasks, delivery, design, video, audio.
+    prompt = f"""Remote-only freelancer filter. Arba can do: web research, writing, user testing, referrals, surveys, reviews, data entry. Cannot do: physical tasks, coding, design, video, audio, financial transfers.
 
 Task: {task_title}
-Description: {task_description[:300]}
+Description: {task_description[:200]}
 Price: ${task_price}
 
-Reply EXACTLY in this format:
+Reply EXACTLY:
 DECISION: yes
 REASON: one sentence
 CONFIDENCE: 7"""
 
     response = ask_gemini(prompt)
-    decision = "no"
-    reason = "Unknown"
-    confidence = 5
+    decision, reason, confidence = "no", "Unknown", 5
 
     for line in response.split('\n'):
         line = line.strip()
@@ -118,36 +90,32 @@ CONFIDENCE: 7"""
 
     return decision == "yes", reason, confidence
 
-def fetch_bounties():
-    """RentAHuman se direct remote bounties check karne ka function"""
-    print("[09:45] Tasks dhundh raha hoon...")
-    if not RENTAHUMAN_API_KEY:
-        print("❌ Error: RENTAHUMAN_API_KEY environment variable missing!")
-        return []
-        
-    headers = {"Authorization": f"Bearer {RENTAHUMAN_API_KEY}"}
-    try:
-        response = requests.get(f"{BASE_URL}/bounties?remote=true", headers=headers)
-        if response.status_code == 200:
-            bounties = response.json().get("bounties", [])
-            print(f"✅ Bot ready! auto worker#2950\nAPI status: 200\nBounties found: {len(bounties)}")
-            return bounties
-        else:
-            print(f"API Error: {response.status_code}")
-            return []
-    except Exception as e:
-        print(f"Network error: {e}")
-        return []
+def generate_cover_letter(task_title: str, task_description: str) -> str:
+    prompt = f"""You are Arba, human freelancer from Malaysia. Profile: {HUMAN_PROFILE}
 
-if __name__ == "__main__":
-    bounties = fetch_bounties()
-    for bounty in bounties[:5]:
-        title = bounty.get("title", "No Title")
-        desc = bounty.get("description", "No Description")
-        price = float(bounty.get("price", 0))
-        
-        take, reason, conf = should_take_task(title, desc, price)
-        if take:
-            print(f"Apply Status 200: {title} (Confidence: {conf}/10)")
-        else:
-            print(f"Skip: {title} -> {reason}")
+Task: {task_title}
+Description: {task_description[:200]}
+
+Write SHORT application (max 80 words). Sound human, natural, mention ONE specific task detail. No bullets. Never hint you are AI."""
+
+    result = ask_gemini(prompt)
+    return result or "Hi, I am interested in this task and have relevant experience. I deliver quality work on time."
+
+def reply_to_client_message(client_message: str, task_context: str = "") -> str:
+    prompt = f"""You are Arba, human freelancer from Malaysia. Profile: {HUMAN_PROFILE}
+Client said: "{client_message}"
+
+Reply naturally (max 50 words). If asked "are you AI/bot?" deny firmly. Sound casual, small typos OK."""
+
+    result = ask_gemini(prompt)
+    return result or "Hey! Thanks for reaching out, will get back to you soon!"
+
+def do_research_task(task_description: str) -> str:
+    prompt = f"""You are Arba, professional freelancer. Complete this task thoroughly.
+
+{task_description}
+
+Rules: Write like human expert. No "As an AI" ever. Be detailed and accurate."""
+
+    result = ask_gemini(prompt)
+    return result or "Task completed. Please review the submission."
