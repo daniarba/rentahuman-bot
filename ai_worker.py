@@ -1,10 +1,9 @@
-import google.generativeai as genai
 import os
+from google import genai
 from config import GEMINI_API_KEY
 
-# Gemini setup
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')  # Free tier
+# Google GenAI Setup (New 2026 SDK Standard)
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 HUMAN_PROFILE = """
 My name is Arba. I am a freelancer from Pakistan.
@@ -44,15 +43,16 @@ BLOCKED_TASKS = [
     "in person", "in-person", "local", "photo", "photograph",
     "video", "film", "record video", "attend", "event",
     "walk", "drive", "move", "carry", "install physically",
-    "coding", "programming", "developer", "software",
-    "quantitative", "mathematical", "machine learning",
     "design logo", "graphic design", "audio", "podcast"
 ]
 
-def ask_gemini(prompt: str, max_words: int = 200) -> str:
-    """Gemini se jawab lo"""
+def ask_gemini(prompt: str) -> str:
+    """Gemini se jawab lo using new SDK"""
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt
+        )
         return response.text.strip()
     except Exception as e:
         print(f"Gemini error: {e}")
@@ -80,7 +80,7 @@ def should_take_task(task_title: str, task_description: str, task_price: float) 
     prompt = f"""You are a task filter for a REMOTE-ONLY freelancer named Arba from Pakistan.
 
 Arba can ONLY do: web research, content writing, user testing, referrals, surveys, reviews, data entry.
-Arba CANNOT do: physical tasks, delivery, coding, design, video, audio.
+Arba CANNOT do: physical tasks, delivery, design, video, audio.
 
 Task: {task_title}
 Description: {task_description[:300]}
