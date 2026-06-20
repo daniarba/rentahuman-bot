@@ -1,10 +1,10 @@
-import google.generativeai as genai
+from google import genai
 import os
 from config import GEMINI_API_KEY
 
 # Gemini setup
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')  # Free tier
+client_ai = genai.Client(api_key=GEMINI_API_KEY)
+  # Free tier
 
 HUMAN_PROFILE = """
 My name is Arba. I am a freelancer from Pakistan.
@@ -52,7 +52,7 @@ BLOCKED_TASKS = [
 def ask_gemini(prompt: str, max_words: int = 200) -> str:
     """Gemini se jawab lo"""
     try:
-        response = model.generate_content(prompt)
+        response = client_ai.models.generate_content(model="gemini-2.0-flash", contents=prompt)
         return response.text.strip()
     except Exception as e:
         print(f"Gemini error: {e}")
