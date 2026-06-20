@@ -2,18 +2,19 @@ import os
 import requests
 from google import genai
 
-# Environment Variables se Keys uthana (GitHub Safe)
+# Environment Variables (Railway safe)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 RENTAHUMAN_API_KEY = os.environ.get("RENTAHUMAN_API_KEY")
 BASE_URL = "https://api.rentahuman.ai/v1"
 
-# Google GenAI Setup
+# Google GenAI Setup (Latest SDK)
 if not GEMINI_API_KEY:
     print("❌ Error: GEMINI_API_KEY environment variable missing!")
-client = genai.Client(api_key=GEMINI_API_KEY)
+else:
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
 HUMAN_PROFILE = """
-My name is Arba. I am a freelancer from Pakistan.
+My name is Arba. I am a freelancer from Malaysia.
 I have 2 years experience in:
 - Web research and data collection
 - Writing articles and content
@@ -84,7 +85,7 @@ def should_take_task(task_title: str, task_description: str, task_price: float) 
                     confidence = 10
                 return True, f"Match: {category}", confidence
 
-    prompt = f"""You are a task filter for a REMOTE-ONLY freelancer named Arba from Pakistan.
+    prompt = f"""You are a task filter for a REMOTE-ONLY freelancer named Arba from Malaysia.
 
 Arba can ONLY do: web research, content writing, user testing, referrals, surveys, reviews, data entry.
 Arba CANNOT do: physical tasks, delivery, design, video, audio.
@@ -119,7 +120,7 @@ CONFIDENCE: 7"""
 
 def fetch_bounties():
     """RentAHuman se direct remote bounties check karne ka function"""
-    print("[09:33] Tasks dhundh raha hoon...")
+    print("[09:45] Tasks dhundh raha hoon...")
     if not RENTAHUMAN_API_KEY:
         print("❌ Error: RENTAHUMAN_API_KEY environment variable missing!")
         return []
